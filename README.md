@@ -80,6 +80,30 @@ tfind bootstrap powershell
 tfind bootstrap bash
 ```
 
+## Custom Storage Path
+
+You can move all `tfind` state files, including transcripts, snapshots, and `current-session.txt`,
+by setting `TFIND_STATE_ROOT`.
+
+### PowerShell
+
+```powershell
+$env:TFIND_STATE_ROOT = "D:\TerminalLogs\tfind"
+. "D:\Terminal-find\integrations\powershell\tfind-profile.ps1"
+```
+
+If you want a custom path every time you open PowerShell, put the same two lines in `$PROFILE`.
+
+### Bash
+
+```bash
+export TFIND_STATE_ROOT="$HOME/terminal-logs/tfind"
+source /path/to/Terminal-find/integrations/bash/tfind.bash
+```
+
+If you only want to override the current session transcript file, set `TFIND_CURRENT_LOG`
+before capture starts.
+
 ## Notes
 
 - PowerShell capture uses `Start-Transcript`.

@@ -1,6 +1,10 @@
 _tfind_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 _tfind_source_root="${_tfind_repo_root}/src"
-_tfind_state_root="${XDG_STATE_HOME:-$HOME/.local/state}/tfind"
+if [[ -n "${TFIND_STATE_ROOT:-}" ]]; then
+  _tfind_state_root="${TFIND_STATE_ROOT}"
+else
+  _tfind_state_root="${XDG_STATE_HOME:-$HOME/.local/state}/tfind"
+fi
 _tfind_sessions_dir="${_tfind_state_root}/sessions"
 
 _tfind_python_path() {

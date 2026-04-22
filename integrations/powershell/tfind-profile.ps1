@@ -1,6 +1,8 @@
 $script:TFindRepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $script:TFindSourceRoot = Join-Path $script:TFindRepoRoot "src"
-$script:TFindStateRoot = if ($env:LOCALAPPDATA) {
+$script:TFindStateRoot = if ($env:TFIND_STATE_ROOT) {
+    $env:TFIND_STATE_ROOT
+} elseif ($env:LOCALAPPDATA) {
     Join-Path $env:LOCALAPPDATA "tfind"
 } else {
     Join-Path $HOME ".tfind"
