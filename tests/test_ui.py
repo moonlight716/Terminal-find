@@ -30,6 +30,26 @@ class UiLayoutTests(unittest.TestCase):
         self.assertIn("r reload  q quit", plain)
         self.assertNotIn("n/p next-prev", plain)
 
+    def test_body_wraps_long_lines_without_horizontal_cropping(self) -> None:
+        state = TranscriptState(
+            source=Path("C:/Users/example/AppData/Local/tfind/sessions/powershell.log"),
+            query="version",
+        )
+        state.lines = [
+            "usage: tfind [-h] [--file FILE] [--follow | --no-follow] [--plain] [--version]",
+            "Search the current terminal transcript or, on Windows, fall back to a console snapshot.",
+        ]
+        state._recompute_matches()
+        state.center_current(body_height=6, width=40)
+
+        body_lines = state.build_body_lines(body_height=6, width=40)
+        plain = "\n".join(strip_ansi(line) for line in body_lines)
+
+        self.assertIn("usage: tfind [-h]", plain)
+        self.assertIn("[--version]", plain)
+        self.assertIn("Search the current terminal", plain)
+        self.assertIn("console snapshot.", plain)
+
 
 if __name__ == "__main__":
     unittest.main()

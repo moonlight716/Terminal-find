@@ -116,8 +116,7 @@ class TranscriptState:
     matches: list[Match] = field(default_factory=list)
     matches_by_line: dict[int, list[Match]] = field(default_factory=dict)
     current_match_index: int | None = None
-    top_line: int = 0
-    horizontal_scroll: int = 0
+    top_row: int = 0
     error: str | None = None
     _signature: tuple[int, int] | None = None
 
@@ -199,18 +198,53 @@ class TranscriptState:
         return "[*]" if enabled else "[ ]"
 
     def center_current(self, body_height: int, width: int) -> None:
-        current = self.current_match()
-        if current is None:
+        current_row = self.current_visual_row_index(width)
+        if current_row is None:
             return
 
-        self.top_line = max(0, current.line_index - max(2, body_height // 2))
-        available_width = max(1, width - LINE_NUMBER_WIDTH)
-        self.horizontal_scroll = max(0, current.start_col - max(4, available_width // 3))
+        self.top_row = max(0, current_row - max(2, body_height // 2))
 
-    def clamp_view(self, body_height: int) -> None:
-        max_top = max(0, len(self.lines) - max(1, body_height))
-        self.top_line = min(max(0, self.top_line), max_top)
-        self.horizontal_scroll = max(0, self.horizontal_scroll)
+    def _available_width(self, width: int) -> int:
+        return max(1, width - LINE_NUMBER_WIDTH)
+
+    def _line_chunk_ranges(self, line: str, available_width: int) -> list[tuple[int, int]]:
+        if not line:
+            return [(0, 0)]
+        return [
+            (start, min(len(line), start + available_width))
+            for start in range(0, len(line), available_width)
+        ]
+
+    def visual_rows(self, width: int) -> list[tuple[int, int, int]]:
+        available_width = self._available_width(width)
+        rows: list[tuple[int, int, int]] = []
+        for line_index, line in enumerate(self.lines):
+            for start_col, end_col in self._line_chunk_ranges(line, available_width):
+                rows.append((line_index, start_col, end_col))
+        return rows
+
+    def current_visual_row_index(self, width: int) -> int | None:
+        current = self.current_match()
+        if current is None:
+            return None
+
+        available_width = self._available_width(width)
+        row_index = 0
+        for line_index, line in enumerate(self.lines):
+            chunk_ranges = self._line_chunk_ranges(line, available_width)
+            if line_index == current.line_index:
+                for start_col, end_col in chunk_ranges:
+                    if current.start_col < end_col or (start_col == end_col == 0):
+                        return row_index
+                    row_index += 1
+                return row_index
+            row_index += len(chunk_ranges)
+
+        return None
+
+    def clamp_view(self, body_height: int, width: int) -> None:
+        max_top = max(0, len(self.visual_rows(width)) - max(1, body_height))
+        self.top_row = min(max(0, self.top_row), max_top)
 
     def build_header_lines(self, width: int) -> list[str]:
         follow_text = "follow:on" if self.follow else "follow:off"
@@ -245,12 +279,10 @@ class TranscriptState:
         ]
         return _wrap_segments(segments, width, fill_style=FOOTER_STYLE)
 
-    def _build_line_body(self, line_index: int, width: int) -> str:
+    def _build_line_body(self, line_index: int, start_col: int, end_col: int, width: int) -> str:
         current = self.current_match()
         line = self.lines[line_index]
-        view_start = self.horizontal_scroll
-        view_end = view_start + width
-        visible = line[view_start:view_end]
+        visible = line[start_col:end_col]
         rendered: list[str] = []
         cursor = 0
 
@@ -262,13 +294,13 @@ class TranscriptState:
             if visible_ordinals is not None and match.ordinal not in visible_ordinals:
                 continue
 
-            overlap_start = max(match.start_col, view_start)
-            overlap_end = min(match.end_col, view_end)
+            overlap_start = max(match.start_col, start_col)
+            overlap_end = min(match.end_col, end_col)
             if overlap_start >= overlap_end:
                 continue
 
-            relative_start = overlap_start - view_start
-            relative_end = overlap_end - view_start
+            relative_start = overlap_start - start_col
+            relative_end = overlap_end - start_col
 
             rendered.append(visible[cursor:relative_start])
             style = CURRENT_MATCH_STYLE if current and match.ordinal == current.ordinal else MATCH_STYLE
@@ -282,7 +314,7 @@ class TranscriptState:
         return "".join(rendered)
 
     def build_body_lines(self, body_height: int, width: int) -> list[str]:
-        self.clamp_view(body_height)
+        self.clamp_view(body_height, width)
         rows: list[str] = []
         if self.error:
             hints = [
@@ -297,15 +329,20 @@ class TranscriptState:
             rows.extend([" " * width for _ in range(max(0, body_height - 1))])
         else:
             current = self.current_match()
-            available_width = max(1, width - LINE_NUMBER_WIDTH)
+            visible_rows = self.visual_rows(width)
             for row_index in range(body_height):
-                line_index = self.top_line + row_index
-                if line_index >= len(self.lines):
+                visual_row_index = self.top_row + row_index
+                if visual_row_index >= len(visible_rows):
                     rows.append(" " * width)
                     continue
-                prefix_style = ACTIVE_LINE_NUMBER_STYLE if current and current.line_index == line_index else LINE_NUMBER_STYLE
-                prefix = _styled(prefix_style, f"{line_index + 1:>6} ")
-                rows.append(prefix + self._build_line_body(line_index, available_width))
+
+                line_index, start_col, end_col = visible_rows[visual_row_index]
+                is_current_line = current is not None and current.line_index == line_index
+                prefix_style = ACTIVE_LINE_NUMBER_STYLE if is_current_line else LINE_NUMBER_STYLE
+                prefix_text = f"{line_index + 1:>6} " if start_col == 0 else "       "
+                prefix = _styled(prefix_style, prefix_text)
+                body_width = self._available_width(width)
+                rows.append(prefix + self._build_line_body(line_index, start_col, end_col, body_width))
 
         return rows[:body_height]
 
@@ -446,7 +483,7 @@ def _build_frame(state: TranscriptState) -> str:
     height = max(6, size.lines)
     header_lines, footer_lines, body_height = _layout_sections(state, width, height)
 
-    state.clamp_view(body_height)
+    state.clamp_view(body_height, width)
     body_rows = state.build_body_lines(body_height=body_height, width=width)
 
     return f"{CLEAR_AND_HOME}" + "\n".join([*header_lines, *body_rows, *footer_lines])
@@ -476,10 +513,11 @@ def _handle_key(key: str, state: TranscriptState) -> bool:
         state.center_current(body_height, width)
         return True
     if key == "PGUP":
-        state.top_line = max(0, state.top_line - max(1, body_height - 2))
+        state.top_row = max(0, state.top_row - max(1, body_height - 2))
         return True
     if key == "PGDN":
-        state.top_line = min(max(0, len(state.lines) - body_height), state.top_line + max(1, body_height - 2))
+        visible_row_count = len(state.visual_rows(width))
+        state.top_row = min(max(0, visible_row_count - body_height), state.top_row + max(1, body_height - 2))
         return True
     if key in {"1", "2", "3", "4"}:
         state.toggle(int(key))
