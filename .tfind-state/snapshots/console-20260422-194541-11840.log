@@ -1,0 +1,11 @@
+=== PowerShell Session History ===
+
+PS D:\demo> python app.py
+Traceback (most recent call last):
+  File "app.py", line 14, in <module>
+    raise RuntimeError("windowsContent failed to load")
+RuntimeError: windowsContent failed to load
+PS D:\demo> echo "retry windowsContent"
+retry windowsContent
+PS D:\demo> write-host "done"
+done

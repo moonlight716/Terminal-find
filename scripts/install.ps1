@@ -1,0 +1,18 @@
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$binPath = Join-Path $repoRoot "bin"
+$profileScript = Join-Path $repoRoot "integrations\powershell\tfind-profile.ps1"
+
+Write-Host ""
+Write-Host "Terminal-find is ready in this workspace."
+Write-Host ""
+Write-Host "1. Put this directory on PATH:"
+Write-Host "   $binPath"
+Write-Host ""
+Write-Host "2. Source this file from your PowerShell profile:"
+Write-Host "   . `"$profileScript`""
+Write-Host ""
+Write-Host "3. Open a new terminal tab and run:"
+Write-Host "   tfind `"windowsContent`""
+Write-Host ""
+Write-Host "Current profile path:"
+Write-Host "   $PROFILE"
