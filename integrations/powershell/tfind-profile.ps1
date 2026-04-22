@@ -18,6 +18,34 @@ function script:TFind-EnsurePythonPath {
     }
 }
 
+function script:TFind-IsTextMode {
+    param(
+        [string[]]$TFindArgs
+    )
+
+    if (-not $TFindArgs -or $TFindArgs.Count -eq 0) {
+        return $true
+    }
+
+    $firstArg = $TFindArgs[0]
+    if ($firstArg -in @("doctor", "bootstrap")) {
+        return $true
+    }
+
+    foreach ($arg in $TFindArgs) {
+        if (
+            $arg -eq "-h" -or
+            $arg -like "--h*" -or
+            $arg -like "--v*" -or
+            $arg -eq "--plain"
+        ) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function global:tfind {
     TFind-EnsurePythonPath
     $historyPath = $null
@@ -39,6 +67,18 @@ function global:tfind {
         $env:TFIND_POWERSHELL_HISTORY_SNAPSHOT = $historyPath
     } catch {
         Remove-Item Env:\TFIND_POWERSHELL_HISTORY_SNAPSHOT -ErrorAction SilentlyContinue
+    }
+
+    if (TFind-IsTextMode -TFindArgs $args) {
+        $outputLines = @(& python -m tfind @args 2>&1 | ForEach-Object { [string]$_ })
+        $exitCode = $LASTEXITCODE
+
+        foreach ($line in $outputLines) {
+            Write-Host $line
+        }
+
+        $global:LASTEXITCODE = $exitCode
+        return
     }
 
     python -m tfind @args
