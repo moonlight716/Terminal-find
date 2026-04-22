@@ -1,0 +1,13 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local runtime state and snapshots
+.tfind-state/
+.bom-test/
+.ps-*-test/
+.test-work/
+
+# Common local artifacts
+.DS_Store
+Thumbs.db
