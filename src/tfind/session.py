@@ -5,6 +5,10 @@ from pathlib import Path
 import tempfile
 
 
+def _clean_path_text(value: str) -> str:
+    return value.lstrip("\ufeff").strip()
+
+
 def state_root() -> Path:
     override = os.environ.get("TFIND_STATE_ROOT")
     candidates: list[Path] = []
@@ -44,15 +48,15 @@ def current_session_pointer() -> Path:
 
 def resolve_transcript(explicit_file: str | None = None) -> Path:
     if explicit_file:
-        return Path(explicit_file).expanduser()
+        return Path(_clean_path_text(explicit_file)).expanduser()
 
     env_path = os.environ.get("TFIND_CURRENT_LOG")
     if env_path:
-        return Path(env_path).expanduser()
+        return Path(_clean_path_text(env_path)).expanduser()
 
     pointer = current_session_pointer()
     if pointer.exists():
-        pointed_path = pointer.read_text(encoding="utf-8").strip()
+        pointed_path = _clean_path_text(pointer.read_text(encoding="utf-8-sig", errors="replace"))
         if pointed_path:
             return Path(pointed_path).expanduser()
 

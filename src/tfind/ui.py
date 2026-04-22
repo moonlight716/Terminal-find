@@ -141,7 +141,7 @@ class TranscriptState:
             self.error = f"Waiting for transcript: {self.source}"
             return True
 
-        raw_text = self.source.read_text(encoding="utf-8", errors="replace")
+        raw_text = self.source.read_text(encoding="utf-8-sig", errors="replace")
         clean_text = strip_ansi(raw_text)
         self.lines = clean_text.splitlines()
         self.error = None

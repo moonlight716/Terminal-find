@@ -8,7 +8,7 @@ import sys
 from tfind import __version__
 from tfind.console_capture import write_console_snapshot
 from tfind.searching import SearchOptions, search_lines, strip_ansi
-from tfind.session import current_session_pointer, resolve_transcript, state_root
+from tfind.session import current_session_pointer, resolve_transcript, sessions_dir, state_root
 from tfind.ui import run_tui
 
 
@@ -20,7 +20,8 @@ def build_search_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tfind",
         description="Search the current terminal transcript or, on Windows, fall back to a console snapshot.",
-        epilog="Extra commands: `tfind doctor`, `tfind bootstrap powershell`, `tfind bootstrap bash`",
+        epilog="Extra commands: `tfind doctor`, `tfind bootstrap powershell`, `tfind bootstrap bash`, `tfind --savepath`",
+        allow_abbrev=False,
     )
     parser.add_argument("query", help="Text to search for.")
     parser.add_argument("--file", help="Search a specific transcript/log file.")
@@ -40,7 +41,7 @@ def build_search_parser() -> argparse.ArgumentParser:
 
 
 def build_doctor_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="tfind doctor", description="Show capture and path status.")
+    parser = argparse.ArgumentParser(prog="tfind doctor", description="Show capture and path status.", allow_abbrev=False)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
@@ -49,6 +50,7 @@ def build_bootstrap_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tfind bootstrap",
         description="Print a shell integration script.",
+        allow_abbrev=False,
     )
     parser.add_argument("shell", choices=["powershell", "bash"])
     parser.add_argument(
@@ -60,7 +62,7 @@ def build_bootstrap_parser() -> argparse.ArgumentParser:
 
 
 def _read_lines(path: Path) -> list[str]:
-    raw_text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+    raw_text = path.read_text(encoding="utf-8-sig", errors="replace") if path.exists() else ""
     return strip_ansi(raw_text).splitlines()
 
 
@@ -107,6 +109,19 @@ def run_doctor() -> int:
     return 0
 
 
+def run_savepath() -> int:
+    pointer = current_session_pointer()
+    print(f"state root: {state_root()}")
+    print(f"sessions dir: {sessions_dir()}")
+    print(f"current pointer: {pointer}")
+    try:
+        transcript = resolve_transcript()
+        print(f"current transcript: {transcript}")
+    except FileNotFoundError:
+        print("current transcript: not active")
+    return 0
+
+
 def run_bootstrap(shell: str, path_only: bool) -> int:
     if shell == "powershell":
         script_path = repo_root() / "integrations" / "powershell" / "tfind-profile.ps1"
@@ -145,6 +160,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     command = args_list[0]
+    known_top_level_flags = {"-h", "--help", "--file", "--follow", "--no-follow", "--plain", "--version", "-s", "--savepath"}
+    if command.startswith("-") and command not in known_top_level_flags:
+        build_search_parser().error(f"unrecognized arguments: {command}")
+
+    if command in {"-s", "--savepath"}:
+        if len(args_list) > 1:
+            print("tfind --savepath does not accept extra arguments.", file=sys.stderr)
+            return 2
+        return run_savepath()
+
     if command == "doctor":
         build_doctor_parser().parse_args(args_list[1:])
         return run_doctor()

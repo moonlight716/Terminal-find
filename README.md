@@ -41,6 +41,16 @@ On Windows, if transcript capture is not enabled yet, `tfind` also has a fallbac
 tfind "windowsContent"
 ```
 
+If `tfind` still resolves to another command, check:
+
+```powershell
+Get-Command tfind
+```
+
+In PowerShell, the correct integrated setup should resolve `tfind` as a `Function`.
+If it resolves to another script such as an npm-installed `tfind.ps1`, keep the profile hook above
+and reopen PowerShell so the function takes precedence.
+
 ### Ubuntu Bash
 
 1. Add the repo `bin/` directory to `PATH`.
