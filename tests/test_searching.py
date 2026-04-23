@@ -32,6 +32,18 @@ class SearchingTests(unittest.TestCase):
             ['$ echo "version"', "version"],
         )
 
+    def test_prepare_transcript_lines_leaves_non_bash_logs_unchanged(self) -> None:
+        raw = "\n".join(
+            [
+                "PS C:\\Terminal-find> tfind \"version\"",
+                "\x1b[31mversion\x1b[0m output",
+            ]
+        )
+        self.assertEqual(
+            prepare_transcript_lines(raw, source=Path("powershell-20260423.log")),
+            ['PS C:\\Terminal-find> tfind "version"', "version output"],
+        )
+
     def test_case_insensitive_search_matches(self) -> None:
         lines = ["windowsContent failed"]
         matches = search_lines(lines, "WINDOWSCONTENT", SearchOptions())

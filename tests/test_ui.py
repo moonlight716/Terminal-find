@@ -36,6 +36,19 @@ class UiLayoutTests(unittest.TestCase):
         self.assertIn('query="version"', plain)
         self.assertIn("follow:on", plain)
 
+    def test_header_shows_full_windows_source_when_width_allows(self) -> None:
+        state = TranscriptState(
+            source=Path(r"C:/Users/25237/AppData/Local/tfind/sessions/powershell-20260423-005432-8068.log"),
+            query="version",
+        )
+        lines = state.build_header_lines(120)
+        plain = strip_ansi(lines[0])
+
+        self.assertEqual(len(lines), 1)
+        self.assertIn(f"source={state.source}", plain)
+        self.assertIn('query="version"', plain)
+        self.assertIn("follow:on", plain)
+
     def test_footer_wraps_without_next_prev_hint(self) -> None:
         sample = Path(__file__).resolve().parents[1] / "examples" / "sample-terminal.log"
         state = TranscriptState(source=sample, query="windowsContent")

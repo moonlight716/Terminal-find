@@ -66,6 +66,22 @@ source /path/to/Terminal-find/integrations/bash/tfind.bash
 tfind "windowsContent"
 ```
 
+If `tfind` still resolves to another command, check:
+
+```bash
+type -a tfind
+```
+
+In Bash, the correct integrated setup should resolve `tfind` as a shell `function`.
+If it resolves to another script or binary first, keep the `source .../tfind.bash` line above
+and open a new shell so the function takes precedence.
+
+If you want to confirm which transcript file the current shell is writing to, run:
+
+```bash
+tfind --savepath
+```
+
 ## Keys Inside `tfind`
 
 - `1`: toggle highlight all
@@ -76,6 +92,8 @@ tfind "windowsContent"
 - `p`, `k`, `Shift-Tab`, `Up`: previous match
 - `Home`, `End`: first or last match
 - `PageUp`, `PageDown`: scroll
+- mouse wheel: move between matches; if there are no matches, scroll the view
+- mouse left drag: use the terminal's normal text selection/copy behavior
 - `r`: reload now
 - `q`, `Esc`, `Ctrl+C`: quit
 
@@ -117,7 +135,7 @@ before capture starts.
 ## Notes
 
 - PowerShell capture uses `Start-Transcript`.
-- Bash capture uses a `tee`-based live log plus a command pre-exec hook.
+- Bash capture uses a `tee`-based live log plus a `PROMPT_COMMAND` history hook.
 - Windows can fall back to a one-time console-buffer snapshot when no transcript exists.
 - In PowerShell fallback mode, `tfind` can also include the current session's command history.
 - Existing scrollback from a terminal session that was not already being captured cannot be recovered generically.
