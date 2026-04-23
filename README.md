@@ -53,12 +53,30 @@ and reopen PowerShell so the function takes precedence.
 
 ### Ubuntu Bash
 
-1. Add the repo `bin/` directory to `PATH`.
-2. Source the Bash integration from `~/.bashrc`:
+1. Choose the Python interpreter you want `tfind` to use permanently. For example:
 
 ```bash
-source /path/to/Terminal-find/integrations/bash/tfind.bash
+which python
+# or:
+which python3
 ```
+
+2. Install the Bash integration once. If you are using the repo checkout directly, run:
+
+```bash
+/path/to/Terminal-find/bin/tfind bootstrap bash --install --python "$(which python)"
+source ~/.bashrc
+```
+
+If you prefer a specific interpreter, pass it explicitly instead:
+
+```bash
+/path/to/Terminal-find/bin/tfind bootstrap bash --install --python /usr/bin/python3.11
+source ~/.bashrc
+```
+
+This writes `~/.config/tfind/config.sh` with `TFIND_PYTHON` and `TFIND_REPO_ROOT`,
+and appends a small `source .../integrations/bash/tfind.bash` block to `~/.bashrc`.
 
 3. Open a new shell and search:
 
@@ -66,15 +84,18 @@ source /path/to/Terminal-find/integrations/bash/tfind.bash
 tfind "windowsContent"
 ```
 
-If `tfind` still resolves to another command, check:
+4. Verify the shell integration:
 
 ```bash
 type -a tfind
+tfind doctor
 ```
 
 In Bash, the correct integrated setup should resolve `tfind` as a shell `function`.
-If it resolves to another script or binary first, keep the `source .../tfind.bash` line above
-and open a new shell so the function takes precedence.
+`tfind doctor` should also show the Bash config path and the pinned `TFIND_PYTHON`.
+
+Once installed, `tfind` keeps using the pinned Python interpreter even if you later run
+`conda activate <other-env>`.
 
 If you want to confirm which transcript file the current shell is writing to, run:
 
@@ -106,6 +127,7 @@ tfind "query" --plain
 tfind doctor
 tfind bootstrap powershell
 tfind bootstrap bash
+tfind bootstrap bash --install --python /absolute/path/to/python
 ```
 
 ## Custom Storage Path
@@ -126,16 +148,27 @@ If you want a custom path every time you open PowerShell, put the same two lines
 
 ```bash
 export TFIND_STATE_ROOT="$HOME/terminal-logs/tfind"
-source /path/to/Terminal-find/integrations/bash/tfind.bash
+/path/to/Terminal-find/bin/tfind bootstrap bash --install --python "$(which python)"
+source ~/.bashrc
 ```
 
 If you only want to override the current session transcript file, set `TFIND_CURRENT_LOG`
 before capture starts.
 
+To change the pinned interpreter later, rerun:
+
+```bash
+/path/to/Terminal-find/bin/tfind bootstrap bash --install --python /new/absolute/path/to/python
+source ~/.bashrc
+```
+
 ## Notes
 
 - PowerShell capture uses `Start-Transcript`.
 - Bash capture uses a `tee`-based live log plus a `PROMPT_COMMAND` history hook.
+- The Bash installer writes `~/.config/tfind/config.sh` and updates `~/.bashrc`.
+- Bash prefers `TFIND_PYTHON`, then `~/.config/tfind/config.sh`, and only then falls back to the current `python3` or `python`.
+- If you move the repo checkout after installing Bash integration, rerun `tfind bootstrap bash --install ...` so `TFIND_REPO_ROOT` is updated.
 - Windows can fall back to a one-time console-buffer snapshot when no transcript exists.
 - In PowerShell fallback mode, `tfind` can also include the current session's command history.
 - Existing scrollback from a terminal session that was not already being captured cannot be recovered generically.

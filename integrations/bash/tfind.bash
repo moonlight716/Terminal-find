@@ -1,4 +1,29 @@
-_tfind_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+_tfind_default_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+  _tfind_config_file_default="${XDG_CONFIG_HOME}/tfind/config.sh"
+else
+  _tfind_config_file_default="${HOME}/.config/tfind/config.sh"
+fi
+
+_tfind_env_python_set="${TFIND_PYTHON+1}"
+_tfind_env_python="${TFIND_PYTHON-}"
+_tfind_env_repo_root_set="${TFIND_REPO_ROOT+1}"
+_tfind_env_repo_root="${TFIND_REPO_ROOT-}"
+
+if [[ -r "${TFIND_CONFIG_FILE:-${_tfind_config_file_default}}" ]]; then
+  # shellcheck disable=SC1090
+  source "${TFIND_CONFIG_FILE:-${_tfind_config_file_default}}"
+fi
+
+if [[ -n "${_tfind_env_python_set:-}" ]]; then
+  export TFIND_PYTHON="${_tfind_env_python}"
+fi
+
+if [[ -n "${_tfind_env_repo_root_set:-}" ]]; then
+  export TFIND_REPO_ROOT="${_tfind_env_repo_root}"
+fi
+
+_tfind_repo_root="${TFIND_REPO_ROOT:-${_tfind_default_repo_root}}"
 _tfind_source_root="${_tfind_repo_root}/src"
 if [[ -n "${TFIND_STATE_ROOT:-}" ]]; then
   _tfind_state_root="${TFIND_STATE_ROOT}"
@@ -13,6 +38,30 @@ _tfind_python_path() {
   elif [[ -z "${PYTHONPATH:-}" ]]; then
     export PYTHONPATH="${_tfind_source_root}"
   fi
+}
+
+_tfind_resolve_python() {
+  if [[ -n "${TFIND_PYTHON:-}" ]]; then
+    if [[ ! -x "${TFIND_PYTHON}" ]]; then
+      printf 'Configured TFIND_PYTHON is not executable: %s\n' "${TFIND_PYTHON}" >&2
+      return 1
+    fi
+    printf '%s\n' "${TFIND_PYTHON}"
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return 0
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    command -v python
+    return 0
+  fi
+
+  printf '%s\n' "tfind is not configured. Run: python3.11 -m tfind bootstrap bash --install --python /absolute/path/to/python" >&2
+  return 1
 }
 
 _tfind_is_text_mode() {
@@ -96,10 +145,14 @@ _tfind_record_history() {
 tfind() {
   _tfind_ensure_session_identity
   _tfind_python_path
+  local tfind_python
+  if ! tfind_python="$(_tfind_resolve_python)"; then
+    return 1
+  fi
   if _tfind_is_text_mode "$@"; then
-    python -m tfind "$@"
+    "${tfind_python}" -m tfind "$@"
   else
-    python -m tfind "$@" < /dev/tty > /dev/tty 2> /dev/tty
+    "${tfind_python}" -m tfind "$@" < /dev/tty > /dev/tty 2> /dev/tty
   fi
 }
 
