@@ -1,13 +1,26 @@
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from tfind.searching import strip_ansi
-from tfind.ui import TERM_NEWLINE, TranscriptState, _build_frame, _frame_dimensions, _handle_key, _parse_posix_escape_sequence
+from tfind.ui import (
+    TERM_NEWLINE,
+    TranscriptState,
+    _PENDING_POSIX_KEYS,
+    _build_frame,
+    _frame_dimensions,
+    _handle_key,
+    _parse_posix_escape_sequence,
+    _read_posix_key,
+)
 
 
 class UiLayoutTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _PENDING_POSIX_KEYS.clear()
+
     def test_header_stays_single_line_and_truncates_source_in_middle(self) -> None:
         state = TranscriptState(
             source=Path("C:/Users/example/AppData/Local/tfind/sessions/powershell-long-session-name.log"),
@@ -100,6 +113,53 @@ class UiLayoutTests(unittest.TestCase):
         self.assertEqual(_parse_posix_escape_sequence("[<65;12;8M"), "SCROLL_DOWN")
         self.assertEqual(_parse_posix_escape_sequence("[<0;12;8M"), "MOUSE")
 
+    def test_read_posix_key_reads_down_arrow_sequence(self) -> None:
+        select_results = [([0], [], []), ([0], [], []), ([0], [], []), ([], [], [])]
+        read_results = [b"\x1b", b"[", b"B"]
+
+        with (
+            patch("tfind.ui.select.select", side_effect=select_results),
+            patch("tfind.ui.os.read", side_effect=read_results),
+            patch("tfind.ui.sys.stdin.fileno", return_value=0),
+        ):
+            self.assertEqual(_read_posix_key(timeout=0.2), "DOWN")
+
+    def test_read_posix_key_coalesces_immediate_repeated_down_sequences(self) -> None:
+        select_results = [
+            ([0], [], []),
+            ([0], [], []),
+            ([0], [], []),
+            ([0], [], []),
+            ([0], [], []),
+            ([0], [], []),
+            ([], [], []),
+        ]
+        read_results = [b"\x1b", b"[", b"B", b"\x1b", b"[", b"B"]
+
+        with (
+            patch("tfind.ui.select.select", side_effect=select_results),
+            patch("tfind.ui.os.read", side_effect=read_results),
+            patch("tfind.ui.sys.stdin.fileno", return_value=0),
+        ):
+            self.assertEqual(_read_posix_key(timeout=0.2), "DOWN")
+
+    def test_read_posix_key_preserves_next_non_navigation_key_after_coalescing(self) -> None:
+        select_results = [
+            ([0], [], []),
+            ([0], [], []),
+            ([0], [], []),
+            ([0], [], []),
+        ]
+        read_results = [b"\x1b", b"[", b"B", b"q"]
+
+        with (
+            patch("tfind.ui.select.select", side_effect=select_results),
+            patch("tfind.ui.os.read", side_effect=read_results),
+            patch("tfind.ui.sys.stdin.fileno", return_value=0),
+        ):
+            self.assertEqual(_read_posix_key(timeout=0.2), "DOWN")
+            self.assertEqual(_read_posix_key(timeout=0.2), "q")
+
     def test_frame_dimensions_ignore_stale_columns_environment(self) -> None:
         with (
             patch.dict(os.environ, {"COLUMNS": "220", "LINES": "60"}, clear=False),
@@ -119,6 +179,38 @@ class UiLayoutTests(unittest.TestCase):
         keep_running = _handle_key("SCROLL_UP", state)
         self.assertTrue(keep_running)
         self.assertEqual(state.current_match_index, 0)
+
+    def test_refresh_ignores_tfind_ui_only_log_growth(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            transcript = Path(temp_dir) / "bash-20260423.log"
+            transcript.write_text(
+                '$ echo "version"\nversion\ntfind "version"\n',
+                encoding="utf-8",
+            )
+
+            state = TranscriptState(source=transcript, query="version")
+            self.assertTrue(state.refresh(force=True))
+            initial_lines = list(state.lines)
+
+            transcript.write_text(
+                "\n".join(
+                    [
+                        '$ echo "version"',
+                        "version",
+                        'tfind "version"',
+                        "__TFIND_INTERACTIVE_BEGIN__",
+                        'tfind query="version" source=/tmp/bash-20260423.log follow:on',
+                        "[*] (1) Highlight all",
+                        "r reload  q quit",
+                        "__TFIND_INTERACTIVE_END__",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            self.assertFalse(state.refresh())
+            self.assertEqual(state.lines, initial_lines)
 
 
 if __name__ == "__main__":

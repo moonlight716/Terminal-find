@@ -31,6 +31,8 @@ else
   _tfind_state_root="${XDG_STATE_HOME:-$HOME/.local/state}/tfind"
 fi
 _tfind_sessions_dir="${_tfind_state_root}/sessions"
+_tfind_interactive_begin_marker="__TFIND_INTERACTIVE_BEGIN__"
+_tfind_interactive_end_marker="__TFIND_INTERACTIVE_END__"
 
 _tfind_python_path() {
   if [[ ":${PYTHONPATH:-}:" != *":${_tfind_source_root}:"* ]] && [[ -n "${PYTHONPATH:-}" ]]; then
@@ -38,6 +40,55 @@ _tfind_python_path() {
   elif [[ -z "${PYTHONPATH:-}" ]]; then
     export PYTHONPATH="${_tfind_source_root}"
   fi
+}
+
+_tfind_script_capture_available() {
+  command -v script >/dev/null 2>&1
+}
+
+_tfind_shell_is_interactive() {
+  [[ $- == *i* ]]
+}
+
+_tfind_has_real_terminal_outputs() {
+  [[ -n "${TFIND_REAL_STDOUT_FD:-}" ]] || return 1
+  [[ -n "${TFIND_REAL_STDERR_FD:-}" ]] || return 1
+  [[ "${TFIND_REAL_STDOUT_FD}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${TFIND_REAL_STDERR_FD}" =~ ^[0-9]+$ ]] || return 1
+  [[ -t "${TFIND_REAL_STDOUT_FD}" ]] || return 1
+  [[ -t "${TFIND_REAL_STDERR_FD}" ]] || return 1
+}
+
+_tfind_spawn_script_capture() {
+  if [[ "${TFIND_SCRIPT_SPAWNED:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  local shell_path="${BASH:-}"
+  if [[ -z "$shell_path" ]]; then
+    shell_path="$(command -v bash 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$shell_path" || ! -x "$shell_path" ]]; then
+    printf '%s\n' "Unable to locate an interactive bash executable for tfind capture." >&2
+    return 1
+  fi
+
+  local script_command
+  printf -v script_command 'exec %q -i' "$shell_path"
+
+  if ! _tfind_has_real_terminal_outputs; then
+    exec {TFIND_REAL_STDOUT_FD}>&1
+    exec {TFIND_REAL_STDERR_FD}>&2
+    export TFIND_REAL_STDOUT_FD TFIND_REAL_STDERR_FD
+  fi
+
+  export TFIND_CAPTURE_ENABLED=1
+  export TFIND_CAPTURE_LOG="${TFIND_CURRENT_LOG}"
+  export TFIND_CAPTURE_BACKEND="script"
+  export TFIND_SCRIPT_SPAWNED=1
+
+  exec script -qef -a --log-out "$TFIND_CURRENT_LOG" --command "$script_command"
 }
 
 _tfind_resolve_python() {
@@ -142,6 +193,19 @@ _tfind_record_history() {
   printf '\n$ %s\n' "$command_text" >> "$TFIND_CURRENT_LOG"
 }
 
+_tfind_remove_history_hook() {
+  if [[ -z "${PROMPT_COMMAND:-}" ]]; then
+    return
+  fi
+
+  local updated="${PROMPT_COMMAND//_tfind_record_history;/}"
+  updated="${updated//;_tfind_record_history/}"
+  updated="${updated//_tfind_record_history/}"
+  updated="${updated#;}"
+  updated="${updated%;}"
+  PROMPT_COMMAND="${updated}"
+}
+
 tfind() {
   _tfind_ensure_session_identity
   _tfind_python_path
@@ -152,7 +216,19 @@ tfind() {
   if _tfind_is_text_mode "$@"; then
     "${tfind_python}" -m tfind "$@"
   else
-    "${tfind_python}" -m tfind "$@" < /dev/tty > /dev/tty 2> /dev/tty
+    if [[ -n "${TFIND_CURRENT_LOG:-}" ]]; then
+      printf '%s\n' "${_tfind_interactive_begin_marker}" >> "$TFIND_CURRENT_LOG"
+    fi
+    if _tfind_has_real_terminal_outputs; then
+      "${tfind_python}" -m tfind "$@" < /dev/tty >&"${TFIND_REAL_STDOUT_FD}" 2>&"${TFIND_REAL_STDERR_FD}"
+    else
+      "${tfind_python}" -m tfind "$@" < /dev/tty > /dev/tty 2> /dev/tty
+    fi
+    local exit_code=$?
+    if [[ -n "${TFIND_CURRENT_LOG:-}" ]]; then
+      printf '%s\n' "${_tfind_interactive_end_marker}" >> "$TFIND_CURRENT_LOG"
+    fi
+    return $exit_code
   fi
 }
 
@@ -161,14 +237,18 @@ tfind_enable_capture() {
   _tfind_python_path
 
   if [[ "${TFIND_CAPTURE_ENABLED:-0}" != "1" ]]; then
-    export TFIND_CAPTURE_ENABLED=1
-    export TFIND_CAPTURE_LOG="${TFIND_CURRENT_LOG}"
-    exec 3>&1 4>&2
-    exec > >(tee -a "$TFIND_CURRENT_LOG" >&3) 2> >(tee -a "$TFIND_CURRENT_LOG" >&4)
+    if _tfind_shell_is_interactive && _tfind_script_capture_available; then
+      _tfind_spawn_script_capture
+    else
+      export TFIND_CAPTURE_ENABLED=1
+      export TFIND_CAPTURE_LOG="${TFIND_CURRENT_LOG}"
+    fi
   fi
 
   if [[ -n "${BASH_VERSION:-}" ]]; then
-    if [[ "${PROMPT_COMMAND:-}" != *"_tfind_record_history"* ]] && [[ -n "${PROMPT_COMMAND:-}" ]]; then
+    if [[ "${TFIND_CAPTURE_BACKEND:-}" == "script" ]]; then
+      _tfind_remove_history_hook
+    elif [[ "${PROMPT_COMMAND:-}" != *"_tfind_record_history"* ]] && [[ -n "${PROMPT_COMMAND:-}" ]]; then
       PROMPT_COMMAND="_tfind_record_history;${PROMPT_COMMAND}"
     elif [[ "${PROMPT_COMMAND:-}" != *"_tfind_record_history"* ]]; then
       PROMPT_COMMAND="_tfind_record_history"

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 import re
+import shlex
 import unicodedata
 
 BASH_PROMPT_PATTERN = re.compile(r"^(?:\([^)]*\)\s+)?[^\s$#][^\s]*[$#](?:\s.*)?$")
@@ -11,7 +12,10 @@ INTERNAL_BASH_LINES = {
     '$ builtin fc -ln -1 -1',
     '$ builtin fc -ln -0 -0',
 }
-RAW_BASH_EDIT_TOKENS = ("\b", "\x07", "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D", "\x1b[K", "\x1b[P")
+SCRIPT_META_PREFIXES = ("Script started on ", "Script done on ")
+INTERACTIVE_TFIND_BEGIN_MARKER = "__TFIND_INTERACTIVE_BEGIN__"
+INTERACTIVE_TFIND_END_MARKER = "__TFIND_INTERACTIVE_END__"
+RAW_BASH_EDIT_TOKENS = ("\b", "\x07", "\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D", "\x1b[P")
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +172,9 @@ def _clean_bash_lines(lines: list[str]) -> list[str]:
         if line in INTERNAL_BASH_LINES:
             continue
 
+        if any(line.startswith(prefix) for prefix in SCRIPT_META_PREFIXES):
+            continue
+
         if BASH_PROMPT_PATTERN.match(line):
             continue
 
@@ -182,26 +189,121 @@ def _clean_bash_lines(lines: list[str]) -> list[str]:
     return cleaned
 
 
+def _extract_bash_prompt_command(line: str) -> str | None:
+    if line.startswith("$ "):
+        return line[2:]
+
+    if not BASH_PROMPT_PATTERN.match(line):
+        return None
+
+    prompt_index = max(line.rfind("$ "), line.rfind("# "))
+    if prompt_index <= 0:
+        return None
+
+    command_text = line[prompt_index + 2 :].strip()
+    if not command_text:
+        return None
+    return command_text
+
+
+def _is_interactive_tfind_command(line: str) -> bool:
+    command_text = line[2:] if line.startswith("$ ") else line
+    if command_text.startswith('tfind query="') and " source=" in command_text and " follow:" in command_text:
+        return False
+    try:
+        argv = shlex.split(command_text)
+    except ValueError:
+        argv = command_text.split()
+
+    if not argv or argv[0] != "tfind":
+        return False
+
+    args = argv[1:]
+    if not args:
+        return False
+
+    if args[0] in {"doctor", "bootstrap"}:
+        return False
+
+    text_mode_flags = {"-h", "--help", "--version", "--plain", "-s", "--savepath"}
+    if any(arg in text_mode_flags for arg in args):
+        return False
+
+    return True
+
+
+def _strip_interactive_tfind_blocks(lines: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    skipping = False
+
+    for line in lines:
+        if line.startswith("$ ") or _is_interactive_tfind_command(line):
+            skipping = _is_interactive_tfind_command(line)
+            cleaned.append(line)
+            continue
+
+        if skipping:
+            continue
+
+        cleaned.append(line)
+
+    return cleaned
+
+
+def _looks_like_bash_edit_noise(raw_line: str, normalized: str) -> bool:
+    if not any(token in raw_line for token in RAW_BASH_EDIT_TOKENS):
+        return False
+
+    if normalized.startswith("$ "):
+        return False
+
+    # Keep ordinary output lines that were only colored or cursor-managed.
+    if normalized and any(char.isalnum() for char in normalized):
+        return False
+
+    return True
+
+
 def prepare_transcript_lines(text: str, source: Path | None = None) -> list[str]:
     if source is not None and source.name.startswith("bash-"):
         raw_lines = text.replace("\r\n", "\n").split("\n")
         cleaned: list[str] = []
+        skipping_interactive_block = False
         for raw_line in raw_lines:
             normalized_parts = strip_ansi(raw_line).splitlines() or [""]
             normalized = normalized_parts[0]
 
+            if normalized == INTERACTIVE_TFIND_BEGIN_MARKER:
+                skipping_interactive_block = True
+                continue
+
+            if normalized == INTERACTIVE_TFIND_END_MARKER:
+                skipping_interactive_block = False
+                continue
+
+            if skipping_interactive_block:
+                continue
+
             if normalized in INTERNAL_BASH_LINES:
+                continue
+
+            if any(normalized.startswith(prefix) for prefix in SCRIPT_META_PREFIXES):
+                continue
+
+            prompt_command = _extract_bash_prompt_command(normalized)
+            if prompt_command is not None:
+                cleaned.append(f"$ {prompt_command}")
                 continue
 
             if BASH_PROMPT_PATTERN.match(normalized):
                 continue
 
-            if any(token in raw_line for token in RAW_BASH_EDIT_TOKENS) and not normalized.startswith("$ "):
+            if _looks_like_bash_edit_noise(raw_line, normalized):
                 continue
 
             cleaned.extend(normalized_parts)
 
-        filtered = _clean_bash_lines(cleaned)
+        filtered = _strip_interactive_tfind_blocks(_clean_bash_lines(cleaned))
         return [line for line in filtered if line]
 
     return strip_ansi(text).splitlines()

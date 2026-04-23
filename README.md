@@ -165,7 +165,7 @@ source ~/.bashrc
 ## Notes
 
 - PowerShell capture uses `Start-Transcript`.
-- Bash capture uses a `tee`-based live log plus a `PROMPT_COMMAND` history hook.
+- Bash capture uses a `script`-based PTY log plus a `PROMPT_COMMAND` history hook.
 - The Bash installer writes `~/.config/tfind/config.sh` and updates `~/.bashrc`.
 - Bash prefers `TFIND_PYTHON`, then `~/.config/tfind/config.sh`, and only then falls back to the current `python3` or `python`.
 - If you move the repo checkout after installing Bash integration, rerun `tfind bootstrap bash --install ...` so `TFIND_REPO_ROOT` is updated.

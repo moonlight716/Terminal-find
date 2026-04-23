@@ -22,6 +22,9 @@ LINE_NUMBER_WIDTH = 7
 REFRESH_INTERVAL = 0.5
 RIGHT_MARGIN = 1
 MOUSE_SCROLL_STEP = 3
+ESC_INITIAL_TIMEOUT = 0.04
+ESC_TRAILING_TIMEOUT = 0.005
+ALT_SCROLL_COALESCE_TIMEOUT = 0.002
 
 ESC = "\x1b"
 RESET = f"{ESC}[0m"
@@ -45,6 +48,8 @@ FOOTER_ON_STYLE = f"{ESC}[48;5;234m{ESC}[38;5;82m{ESC}[1m"
 FOOTER_OFF_STYLE = f"{ESC}[48;5;234m{ESC}[38;5;245m"
 FOOTER_MATCH_STYLE = f"{ESC}[48;5;234m{ESC}[38;5;255m{ESC}[1m"
 FOOTER_WARN_STYLE = f"{ESC}[48;5;234m{ESC}[38;5;217m{ESC}[1m"
+
+_PENDING_POSIX_KEYS: list[str] = []
 
 
 def _styled(style: str, text: str) -> str:
@@ -168,6 +173,8 @@ class TranscriptState:
     _signature: tuple[int, int] | None = None
 
     def refresh(self, force: bool = False) -> bool:
+        previous_lines = self.lines
+        previous_error = self.error
         try:
             stat = self.source.stat()
             signature = (stat.st_mtime_ns, stat.st_size)
@@ -180,16 +187,18 @@ class TranscriptState:
         self._signature = signature
 
         if signature is None:
-            self.lines = []
-            self.matches = []
-            self.matches_by_line = {}
-            self.current_match_index = None
-            self.error = f"Waiting for transcript: {self.source}"
-            return True
+            next_lines: list[str] = []
+            next_error = f"Waiting for transcript: {self.source}"
+        else:
+            raw_text = self.source.read_text(encoding="utf-8-sig", errors="replace")
+            next_lines = prepare_transcript_lines(raw_text, source=self.source)
+            next_error = None
 
-        raw_text = self.source.read_text(encoding="utf-8-sig", errors="replace")
-        self.lines = prepare_transcript_lines(raw_text, source=self.source)
-        self.error = None
+        if not force and next_lines == previous_lines and next_error == previous_error:
+            return False
+
+        self.lines = next_lines
+        self.error = next_error
         self._recompute_matches()
         return True
 
@@ -498,12 +507,13 @@ def _read_windows_key(timeout: float | None) -> str | None:
         time.sleep(0.03)
 
 
-def _read_posix_key(timeout: float | None) -> str | None:
-    ready, _, _ = select.select([sys.stdin], [], [], timeout)
+def _read_one_posix_key(timeout: float | None) -> str | None:
+    stdin_fd = sys.stdin.fileno()
+    ready, _, _ = select.select([stdin_fd], [], [], timeout)
     if not ready:
         return None
 
-    first = os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="ignore")
+    first = os.read(stdin_fd, 1).decode("utf-8", errors="ignore")
     if first == "\x03":
         return "CTRL_C"
     if first in ("\r", "\n"):
@@ -512,15 +522,49 @@ def _read_posix_key(timeout: float | None) -> str | None:
         return first
 
     sequence = ""
+    ready, _, _ = select.select([stdin_fd], [], [], ESC_INITIAL_TIMEOUT)
+    if not ready:
+        return "ESC"
+
     while True:
-        ready, _, _ = select.select([sys.stdin], [], [], 0.01)
-        if not ready:
+        sequence += os.read(stdin_fd, 1).decode("utf-8", errors="ignore")
+        if _is_complete_posix_escape_sequence(sequence):
             break
-        sequence += os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="ignore")
-        if sequence.endswith(("A", "B", "C", "D", "F", "H", "~", "M", "m")):
+        ready, _, _ = select.select([stdin_fd], [], [], ESC_TRAILING_TIMEOUT)
+        if not ready:
             break
 
     return _parse_posix_escape_sequence(sequence)
+
+
+def _coalesce_alt_scroll_navigation(first_key: str) -> None:
+    deadline = time.monotonic() + ALT_SCROLL_COALESCE_TIMEOUT
+    while time.monotonic() < deadline:
+        extra_key = _read_one_posix_key(0)
+        if extra_key is None:
+            return
+        if extra_key == first_key:
+            continue
+        _PENDING_POSIX_KEYS.append(extra_key)
+        return
+
+
+def _read_posix_key(timeout: float | None) -> str | None:
+    if _PENDING_POSIX_KEYS:
+        return _PENDING_POSIX_KEYS.pop(0)
+
+    key = _read_one_posix_key(timeout)
+    if key in {"UP", "DOWN"}:
+        _coalesce_alt_scroll_navigation(key)
+    return key
+
+
+def _is_complete_posix_escape_sequence(sequence: str) -> bool:
+    if not sequence:
+        return False
+    if sequence.startswith("[<"):
+        return sequence.endswith(("M", "m"))
+    return sequence.endswith(("A", "B", "C", "D", "F", "H", "~"))
 
 
 def _parse_posix_escape_sequence(sequence: str) -> str:
@@ -672,11 +716,15 @@ def run_tui(source: Path, query: str, follow: bool = True) -> None:
     width, height = _frame_dimensions()
     _, _, body_height = _layout_sections(state, width, height)
     state.center_current(body_height=body_height, width=width)
+    needs_render = True
 
     try:
         with _TerminalSession() as session:
             while True:
-                session.render(_build_frame(state))
+                if needs_render:
+                    session.render(_build_frame(state))
+                    needs_render = False
+
                 key = session.read_key(REFRESH_INTERVAL if follow else None)
 
                 changed = False
@@ -686,6 +734,7 @@ def run_tui(source: Path, query: str, follow: bool = True) -> None:
                         width, height = _frame_dimensions()
                         _, _, body_height = _layout_sections(state, width, height)
                         state.center_current(body_height=body_height, width=width)
+                    needs_render = needs_render or changed
 
                 if key is None:
                     continue
@@ -693,5 +742,6 @@ def run_tui(source: Path, query: str, follow: bool = True) -> None:
                 keep_running = _handle_key(key, state)
                 if not keep_running:
                     break
+                needs_render = True
     except KeyboardInterrupt:
         return
