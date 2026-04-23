@@ -1,0 +1,131 @@
+Metadata-Version: 2.4
+Name: terminal-find
+Version: 0.1.0
+Summary: Search the active terminal transcript with a Ctrl+F-style TUI.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+
+# Terminal-find
+
+`Terminal-find` gives you a `Ctrl+F`-style search experience for terminal sessions.
+The command is `tfind`.
+
+It is built around a practical constraint:
+
+- A normal CLI tool cannot universally read and control another terminal emulator's private scrollback buffer.
+- To make search reliable on Windows 11 and Ubuntu, `tfind` searches a live transcript/log of the current shell session instead.
+
+That means once capture is enabled, `tfind "windowsContent"` can:
+
+- jump to the first match immediately
+- highlight the current match or all matches
+- show match counts
+- toggle case sensitivity, accent matching, and whole-word matching with keys `1` to `4`
+- keep refreshing while the transcript grows
+
+On Windows, if transcript capture is not enabled yet, `tfind` also has a fallback:
+
+- it can snapshot the current console buffer and search that immediately
+- when launched from the PowerShell integration function, it also merges the current session command history
+- this is useful for the terminal text you can already see right now
+- live refresh still needs transcript capture
+
+## Quick Start
+
+### Windows PowerShell
+
+1. Add `D:\Terminal-find\bin` to your `PATH`, or call the wrapper directly:
+   `D:\Terminal-find\bin\tfind.cmd`
+2. Source the integration script from your PowerShell profile:
+
+```powershell
+. "D:\Terminal-find\integrations\powershell\tfind-profile.ps1"
+```
+
+3. Open a new terminal tab, run a few commands, then search:
+
+```powershell
+tfind "windowsContent"
+```
+
+If `tfind` still resolves to another command, check:
+
+```powershell
+Get-Command tfind
+```
+
+In PowerShell, the correct integrated setup should resolve `tfind` as a `Function`.
+If it resolves to another script such as an npm-installed `tfind.ps1`, keep the profile hook above
+and reopen PowerShell so the function takes precedence.
+
+### Ubuntu Bash
+
+1. Add the repo `bin/` directory to `PATH`.
+2. Source the Bash integration from `~/.bashrc`:
+
+```bash
+source /path/to/Terminal-find/integrations/bash/tfind.bash
+```
+
+3. Open a new shell and search:
+
+```bash
+tfind "windowsContent"
+```
+
+## Keys Inside `tfind`
+
+- `1`: toggle highlight all
+- `2`: toggle case sensitive
+- `3`: toggle match accents
+- `4`: toggle whole word
+- `n`, `j`, `Enter`, `Down`: next match
+- `p`, `k`, `Shift-Tab`, `Up`: previous match
+- `Home`, `End`: first or last match
+- `PageUp`, `PageDown`: scroll
+- `r`: reload now
+- `q`, `Esc`, `Ctrl+C`: quit
+
+## Commands
+
+```text
+tfind "query"
+tfind "query" --file path/to/log.txt
+tfind "query" --plain
+tfind doctor
+tfind bootstrap powershell
+tfind bootstrap bash
+```
+
+## Custom Storage Path
+
+You can move all `tfind` state files, including transcripts, snapshots, and `current-session.txt`,
+by setting `TFIND_STATE_ROOT`.
+
+### PowerShell
+
+```powershell
+$env:TFIND_STATE_ROOT = "D:\TerminalLogs\tfind"
+. "D:\Terminal-find\integrations\powershell\tfind-profile.ps1"
+```
+
+If you want a custom path every time you open PowerShell, put the same two lines in `$PROFILE`.
+
+### Bash
+
+```bash
+export TFIND_STATE_ROOT="$HOME/terminal-logs/tfind"
+source /path/to/Terminal-find/integrations/bash/tfind.bash
+```
+
+If you only want to override the current session transcript file, set `TFIND_CURRENT_LOG`
+before capture starts.
+
+## Notes
+
+- PowerShell capture uses `Start-Transcript`.
+- Bash capture uses a `tee`-based live log plus a command pre-exec hook.
+- Windows can fall back to a one-time console-buffer snapshot when no transcript exists.
+- In PowerShell fallback mode, `tfind` can also include the current session's command history.
+- Existing scrollback from a terminal session that was not already being captured cannot be recovered generically.
+- ANSI color codes are stripped before searching so matches stay readable.

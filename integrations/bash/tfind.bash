@@ -64,6 +64,35 @@ _tfind_ensure_session_identity() {
   _tfind_update_pointer
 }
 
+_tfind_record_history() {
+  if [[ -z "${TFIND_CURRENT_LOG:-}" ]]; then
+    return
+  fi
+
+  local history_id="${HISTCMD:-}"
+  if [[ -z "$history_id" || "$history_id" == "${TFIND_LAST_HISTORY_ID:-}" ]]; then
+    return
+  fi
+
+  local command_text
+  command_text="$(builtin fc -ln -0 -0)"
+  command_text="${command_text%$'\n'}"
+  command_text="${command_text#"${command_text%%[![:space:]]*}"}"
+  export TFIND_LAST_HISTORY_ID="$history_id"
+
+  if [[ -z "$command_text" ]]; then
+    return
+  fi
+
+  case "$command_text" in
+    _tfind_*|history*|builtin\ history*|builtin\ fc*)
+      return
+      ;;
+  esac
+
+  printf '\n$ %s\n' "$command_text" >> "$TFIND_CURRENT_LOG"
+}
+
 tfind() {
   _tfind_ensure_session_identity
   _tfind_python_path
@@ -71,24 +100,6 @@ tfind() {
     python -m tfind "$@"
   else
     python -m tfind "$@" < /dev/tty > /dev/tty 2> /dev/tty
-  fi
-}
-
-_tfind_record_command() {
-  local command_text="${BASH_COMMAND:-}"
-  if [[ -z "${TFIND_CURRENT_LOG:-}" || -z "$command_text" ]]; then
-    return
-  fi
-
-  case "$command_text" in
-    _tfind_record_command*|_tfind_python_path*|history*|printf\ \'\\n\$\ %s\\n\'*)
-      return
-      ;;
-  esac
-
-  if [[ "$command_text" != "${TFIND_LAST_COMMAND:-}" ]]; then
-    printf '\n$ %s\n' "$command_text" >> "$TFIND_CURRENT_LOG"
-    export TFIND_LAST_COMMAND="$command_text"
   fi
 }
 
@@ -104,10 +115,10 @@ tfind_enable_capture() {
   fi
 
   if [[ -n "${BASH_VERSION:-}" ]]; then
-    if [[ "${PS0:-}" != *'$(_tfind_record_command)'* ]] && [[ -n "${PS0:-}" ]]; then
-      PS0='$(_tfind_record_command)'"${PS0}"
-    elif [[ "${PS0:-}" != *'$(_tfind_record_command)'* ]]; then
-      PS0='$(_tfind_record_command)'
+    if [[ "${PROMPT_COMMAND:-}" != *"_tfind_record_history"* ]] && [[ -n "${PROMPT_COMMAND:-}" ]]; then
+      PROMPT_COMMAND="_tfind_record_history;${PROMPT_COMMAND}"
+    elif [[ "${PROMPT_COMMAND:-}" != *"_tfind_record_history"* ]]; then
+      PROMPT_COMMAND="_tfind_record_history"
     fi
   fi
 }

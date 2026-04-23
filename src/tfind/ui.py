@@ -8,7 +8,7 @@ import shutil
 import sys
 import time
 
-from tfind.searching import Match, SearchOptions, search_lines, strip_ansi
+from tfind.searching import Match, SearchOptions, prepare_transcript_lines, search_lines
 
 if os.name == "nt":
     import ctypes
@@ -20,6 +20,8 @@ else:
 
 LINE_NUMBER_WIDTH = 7
 REFRESH_INTERVAL = 0.5
+RIGHT_MARGIN = 1
+MOUSE_SCROLL_STEP = 3
 
 ESC = "\x1b"
 RESET = f"{ESC}[0m"
@@ -27,7 +29,10 @@ ALT_SCREEN_ON = f"{ESC}[?1049h"
 ALT_SCREEN_OFF = f"{ESC}[?1049l"
 CURSOR_HIDE = f"{ESC}[?25l"
 CURSOR_SHOW = f"{ESC}[?25h"
+ALT_SCROLL_ON = f"{ESC}[?1007h"
+ALT_SCROLL_OFF = f"{ESC}[?1007l"
 CLEAR_AND_HOME = f"{ESC}[2J{ESC}[H"
+TERM_NEWLINE = "\r\n"
 HEADER_STYLE = f"{ESC}[48;5;236m{ESC}[38;5;255m{ESC}[1m"
 HEADER_META_STYLE = f"{ESC}[48;5;236m{ESC}[38;5;250m"
 LINE_NUMBER_STYLE = f"{ESC}[38;5;244m"
@@ -62,12 +67,54 @@ def _truncate(text: str, width: int) -> str:
     return f"{text[: width - 3]}..."
 
 
+def _ellipsize_end(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return "." * width
+    return f"{text[: width - 3]}..."
+
+
+def _ellipsize_middle(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return "." * width
+
+    left = max(1, (width - 3) // 2)
+    right = max(1, width - 3 - left)
+    return f"{text[:left]}...{text[-right:]}"
+
+
 def _finalize_line(rendered_parts: list[str], plain_length: int, width: int, fill_style: str) -> str:
     parts = list(rendered_parts)
     if plain_length < width:
         padding = " " * (width - plain_length)
         parts.append(_styled(fill_style, padding) if fill_style else padding)
     return "".join(parts)
+
+
+def _render_single_line(segments: list[tuple[str, str]], width: int, fill_style: str = "") -> str:
+    rendered_parts: list[str] = []
+    plain_length = 0
+
+    for style, text in segments:
+        if not text:
+            continue
+
+        remaining = width - plain_length
+        if remaining <= 0:
+            break
+
+        chunk = text[:remaining]
+        rendered_parts.append(_styled(style, chunk) if style else chunk)
+        plain_length += len(chunk)
+
+    return _finalize_line(rendered_parts, plain_length, width, fill_style)
 
 
 def _wrap_segments(segments: list[tuple[str, str]], width: int, fill_style: str = "") -> list[str]:
@@ -141,8 +188,7 @@ class TranscriptState:
             return True
 
         raw_text = self.source.read_text(encoding="utf-8-sig", errors="replace")
-        clean_text = strip_ansi(raw_text)
-        self.lines = clean_text.splitlines()
+        self.lines = prepare_transcript_lines(raw_text, source=self.source)
         self.error = None
         self._recompute_matches()
         return True
@@ -247,14 +293,42 @@ class TranscriptState:
         self.top_row = min(max(0, self.top_row), max_top)
 
     def build_header_lines(self, width: int) -> list[str]:
-        follow_text = "follow:on" if self.follow else "follow:off"
+        title_text = " tfind "
+        follow_text = f"follow:{'on' if self.follow else 'off'} "
+        query_text = f'query="{self.query}" '
+        source_prefix = "source="
+        source_text = str(self.source)
+
+        available = max(0, width - len(title_text) - len(follow_text))
+        if available <= 0:
+            return [_render_single_line([(HEADER_STYLE, title_text), (HEADER_META_STYLE, follow_text)], width, fill_style=HEADER_STYLE)]
+
+        preferred_query = len(query_text)
+        min_query = min(preferred_query, max(12, available // 3))
+        min_source_value = 12
+
+        query_budget = min(preferred_query, max(min_query, available - len(source_prefix) - min_source_value))
+        query_budget = min(query_budget, available)
+        source_budget = max(0, available - query_budget)
+
+        if 0 < source_budget < len(source_prefix) + min_source_value + 1:
+            shrink = len(source_prefix) + min_source_value + 1 - source_budget
+            query_budget = max(min(12, preferred_query), query_budget - shrink)
+            source_budget = max(0, available - query_budget)
+
+        rendered_query = _ellipsize_end(query_text, query_budget)
+        source_value_budget = max(0, source_budget - len(source_prefix))
+        rendered_source = ""
+        if source_value_budget > 0:
+            rendered_source = f"{source_prefix}{_ellipsize_middle(source_text, source_value_budget)} "
+
         segments = [
-            (HEADER_STYLE, " tfind "),
-            (HEADER_META_STYLE, f'  query="{self.query}"  '),
-            (HEADER_META_STYLE, f"source={self.source}  "),
-            (HEADER_META_STYLE, f"{follow_text}  "),
+            (HEADER_STYLE, title_text),
+            (HEADER_META_STYLE, rendered_query),
+            (HEADER_META_STYLE, rendered_source),
+            (HEADER_META_STYLE, follow_text),
         ]
-        return _wrap_segments(segments, width, fill_style=HEADER_STYLE)
+        return [_render_single_line(segments, width, fill_style=HEADER_STYLE)]
 
     def build_footer_lines(self, width: int) -> list[str]:
         option_style = FOOTER_ON_STYLE if self.options.highlight_all else FOOTER_OFF_STYLE
@@ -362,14 +436,16 @@ class _TerminalSession(AbstractContextManager["_TerminalSession"]):
             self._saved_termios = termios.tcgetattr(self._stdin_fd)
             tty.setraw(self._stdin_fd)
 
-        self._stdout.write(f"{ALT_SCREEN_ON}{CURSOR_HIDE}")
+        alt_scroll_sequence = "" if os.name == "nt" else ALT_SCROLL_ON
+        self._stdout.write(f"{ALT_SCREEN_ON}{CURSOR_HIDE}{alt_scroll_sequence}")
         self._stdout.flush()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._stdin_fd is not None and self._saved_termios is not None:
             termios.tcsetattr(self._stdin_fd, termios.TCSADRAIN, self._saved_termios)
-        self._stdout.write(f"{RESET}{CURSOR_SHOW}{ALT_SCREEN_OFF}")
+        alt_scroll_sequence = "" if os.name == "nt" else ALT_SCROLL_OFF
+        self._stdout.write(f"{RESET}{alt_scroll_sequence}{CURSOR_SHOW}{ALT_SCREEN_OFF}")
         self._stdout.flush()
         return None
 
@@ -441,8 +517,16 @@ def _read_posix_key(timeout: float | None) -> str | None:
         if not ready:
             break
         sequence += os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="ignore")
-        if sequence.endswith(("A", "B", "C", "D", "F", "H", "~")):
+        if sequence.endswith(("A", "B", "C", "D", "F", "H", "~", "M", "m")):
             break
+
+    return _parse_posix_escape_sequence(sequence)
+
+
+def _parse_posix_escape_sequence(sequence: str) -> str:
+    mouse_key = _parse_sgr_mouse(sequence)
+    if mouse_key is not None:
+        return mouse_key
 
     mapping = {
         "[A": "UP",
@@ -457,6 +541,44 @@ def _read_posix_key(timeout: float | None) -> str | None:
         "OF": "END",
     }
     return mapping.get(sequence, "ESC")
+
+
+def _parse_sgr_mouse(sequence: str) -> str | None:
+    if not sequence.startswith("[<") or not sequence.endswith(("M", "m")):
+        return None
+
+    payload = sequence[2:-1]
+    parts = payload.split(";")
+    if len(parts) != 3:
+        return None
+
+    try:
+        button_code = int(parts[0])
+    except ValueError:
+        return None
+
+    normalized_button = button_code & ~0b11100
+    if normalized_button == 64:
+        return "SCROLL_UP"
+    if normalized_button == 65:
+        return "SCROLL_DOWN"
+    return "MOUSE"
+
+
+def _terminal_size() -> os.terminal_size:
+    for stream in (sys.stdout, sys.stdin):
+        try:
+            return os.get_terminal_size(stream.fileno())
+        except (OSError, ValueError):
+            continue
+    return shutil.get_terminal_size(fallback=(120, 32))
+
+
+def _frame_dimensions() -> tuple[int, int]:
+    size = _terminal_size()
+    width = max(1, size.columns - RIGHT_MARGIN)
+    height = max(1, size.lines)
+    return width, height
 
 
 def _layout_sections(state: TranscriptState, width: int, height: int) -> tuple[list[str], list[str], int]:
@@ -478,21 +600,18 @@ def _layout_sections(state: TranscriptState, width: int, height: int) -> tuple[l
 
 
 def _build_frame(state: TranscriptState) -> str:
-    size = shutil.get_terminal_size(fallback=(120, 32))
-    width = max(20, size.columns)
-    height = max(6, size.lines)
+    width, height = _frame_dimensions()
     header_lines, footer_lines, body_height = _layout_sections(state, width, height)
 
     state.clamp_view(body_height, width)
     body_rows = state.build_body_lines(body_height=body_height, width=width)
 
-    return f"{CLEAR_AND_HOME}" + "\n".join([*header_lines, *body_rows, *footer_lines])
+    return f"{CLEAR_AND_HOME}" + TERM_NEWLINE.join([*header_lines, *body_rows, *footer_lines])
 
 
 def _handle_key(key: str, state: TranscriptState) -> bool:
-    current_size = shutil.get_terminal_size(fallback=(120, 32))
-    width = max(20, current_size.columns)
-    _, _, body_height = _layout_sections(state, width, max(6, current_size.lines))
+    width, height = _frame_dimensions()
+    _, _, body_height = _layout_sections(state, width, height)
 
     if key in {"q", "Q", "ESC", "CTRL_C"}:
         return False
@@ -519,6 +638,23 @@ def _handle_key(key: str, state: TranscriptState) -> bool:
         visible_row_count = len(state.visual_rows(width))
         state.top_row = min(max(0, visible_row_count - body_height), state.top_row + max(1, body_height - 2))
         return True
+    if key == "SCROLL_UP":
+        if state.matches:
+            state.move_previous()
+            state.center_current(body_height, width)
+            return True
+        state.top_row = max(0, state.top_row - MOUSE_SCROLL_STEP)
+        return True
+    if key == "SCROLL_DOWN":
+        if state.matches:
+            state.move_next()
+            state.center_current(body_height, width)
+            return True
+        visible_row_count = len(state.visual_rows(width))
+        state.top_row = min(max(0, visible_row_count - body_height), state.top_row + MOUSE_SCROLL_STEP)
+        return True
+    if key == "MOUSE":
+        return True
     if key in {"1", "2", "3", "4"}:
         state.toggle(int(key))
         state.center_current(body_height, width)
@@ -533,9 +669,8 @@ def _handle_key(key: str, state: TranscriptState) -> bool:
 def run_tui(source: Path, query: str, follow: bool = True) -> None:
     state = TranscriptState(source=source, query=query, follow=follow)
     state.refresh(force=True)
-    size = shutil.get_terminal_size(fallback=(120, 32))
-    width = max(20, size.columns)
-    _, _, body_height = _layout_sections(state, width, max(6, size.lines))
+    width, height = _frame_dimensions()
+    _, _, body_height = _layout_sections(state, width, height)
     state.center_current(body_height=body_height, width=width)
 
     try:
@@ -548,9 +683,8 @@ def run_tui(source: Path, query: str, follow: bool = True) -> None:
                 if follow:
                     changed = state.refresh()
                     if changed and state.current_match() is None and state.matches:
-                        size = shutil.get_terminal_size(fallback=(120, 32))
-                        width = max(20, size.columns)
-                        _, _, body_height = _layout_sections(state, width, max(6, size.lines))
+                        width, height = _frame_dimensions()
+                        _, _, body_height = _layout_sections(state, width, height)
                         state.center_current(body_height=body_height, width=width)
 
                 if key is None:

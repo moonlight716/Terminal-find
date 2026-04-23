@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import sys
 
 from tfind import __version__
 from tfind.console_capture import write_console_snapshot
-from tfind.searching import SearchOptions, search_lines, strip_ansi
+from tfind.searching import SearchOptions, prepare_transcript_lines, search_lines
 from tfind.session import current_session_pointer, resolve_transcript, sessions_dir, state_root
 from tfind.ui import run_tui
 
@@ -63,7 +64,7 @@ def build_bootstrap_parser() -> argparse.ArgumentParser:
 
 def _read_lines(path: Path) -> list[str]:
     raw_text = path.read_text(encoding="utf-8-sig", errors="replace") if path.exists() else ""
-    return strip_ansi(raw_text).splitlines()
+    return prepare_transcript_lines(raw_text, source=path)
 
 
 def run_plain_search(query: str, source: Path) -> int:
@@ -153,6 +154,43 @@ def _resolve_source_with_fallback(explicit_file: str | None) -> tuple[Path | Non
         return None, False, str(exc)
 
 
+@contextmanager
+def _interactive_terminal() -> bool:
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        yield True
+        return
+
+    if os.name == "nt":
+        yield False
+        return
+
+    try:
+        tty_fd = os.open("/dev/tty", os.O_RDWR)
+    except OSError:
+        yield False
+        return
+
+    saved_fds: dict[int, int] = {}
+    try:
+        for stream in (sys.stdout, sys.stderr):
+            stream.flush()
+
+        for target in (0, 1, 2):
+            saved_fds[target] = os.dup(target)
+            os.dup2(tty_fd, target)
+
+        yield sys.stdin.isatty() and sys.stdout.isatty()
+    finally:
+        for stream in (sys.stdout, sys.stderr):
+            stream.flush()
+
+        for target, saved_fd in saved_fds.items():
+            os.dup2(saved_fd, target)
+            os.close(saved_fd)
+
+        os.close(tty_fd)
+
+
 def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
     if not args_list:
@@ -198,11 +236,12 @@ def main(argv: list[str] | None = None) -> int:
             print(source_note, file=sys.stderr)
         return run_plain_search(query=parsed.query, source=transcript)
 
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
-        print("Interactive mode requires a real terminal. Use --plain for non-interactive output.", file=sys.stderr)
-        return 2
+    with _interactive_terminal() as interactive_ready:
+        if not interactive_ready:
+            print("Interactive mode requires a real terminal. Use --plain for non-interactive output.", file=sys.stderr)
+            return 2
 
-    if source_note:
-        print(source_note, file=sys.stderr)
-    run_tui(source=transcript, query=parsed.query, follow=(parsed.follow and follow))
+        if source_note:
+            print(source_note, file=sys.stderr)
+        run_tui(source=transcript, query=parsed.query, follow=(parsed.follow and follow))
     return 0

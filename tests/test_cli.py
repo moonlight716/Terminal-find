@@ -3,7 +3,8 @@ import os
 from pathlib import Path
 import shutil
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from unittest.mock import patch
 
 from tfind.cli import main
 
@@ -45,6 +46,43 @@ class CliTests(unittest.TestCase):
                 os.environ.pop("TFIND_CURRENT_LOG", None)
             else:
                 os.environ["TFIND_CURRENT_LOG"] = previous_current_log
+
+    def test_interactive_search_uses_attached_terminal_context(self) -> None:
+        transcript = Path("/tmp/tfind-session.log")
+
+        @contextmanager
+        def interactive_terminal() -> bool:
+            yield True
+
+        with (
+            patch("tfind.cli._resolve_source_with_fallback", return_value=(transcript, True, None)),
+            patch("tfind.cli._interactive_terminal", side_effect=interactive_terminal),
+            patch("tfind.cli.run_tui") as run_tui,
+        ):
+            exit_code = main(["version"])
+
+        self.assertEqual(exit_code, 0)
+        run_tui.assert_called_once_with(source=transcript, query="version", follow=True)
+
+    def test_interactive_search_errors_when_no_terminal_is_available(self) -> None:
+        transcript = Path("/tmp/tfind-session.log")
+
+        @contextmanager
+        def interactive_terminal() -> bool:
+            yield False
+
+        stderr = io.StringIO()
+        with (
+            patch("tfind.cli._resolve_source_with_fallback", return_value=(transcript, True, None)),
+            patch("tfind.cli._interactive_terminal", side_effect=interactive_terminal),
+            patch("tfind.cli.run_tui") as run_tui,
+            redirect_stderr(stderr),
+        ):
+            exit_code = main(["version"])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("Interactive mode requires a real terminal.", stderr.getvalue())
+        run_tui.assert_not_called()
 
 
 if __name__ == "__main__":
