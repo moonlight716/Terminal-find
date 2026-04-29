@@ -23,6 +23,12 @@ On Windows, if transcript capture is not enabled yet, `tfind` also has a fallbac
 - this is useful for the terminal text you can already see right now
 - live refresh still needs transcript capture
 
+## Preview
+
+![Terminal-find architecture and overview](assets/Terminal-find.png)
+
+![Terminal-find Windows usage interface](assets/usage.png)
+
 ## Quick Start
 
 ### Windows PowerShell
